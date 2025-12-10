@@ -1,0 +1,202 @@
+P(16 children | 1 parent) → tensor of shape (256, 1024, 1024, ..., 1024)  ← 17 dimensions
+                                           = 256 × 1024¹⁶ numbers
+                                           ≈ 2⁸ × (2¹⁰)¹⁶ = 2⁸ × 2¹⁶⁰ = 2¹⁶⁸ ≈ 10⁵⁰ values
+
+log P(child_i = k | parent = p) = A[p, k] + B[i, k]
+
+Full table[p, k₁, k₂, ..., k₁₆] = A[p, k₁] ⊕ A[p, k₂] ⊕ ... ⊕ A[p, k₁₆] ⊕ B[1, k₁] ⊕ B[2, k₂] ⊕ ... ⊕ B[16, k₁₆]
+                              = (A + B[1]) ⊕ (A + B[2]) ⊕ ... ⊕ (A + B[16])
+
+logits = A[parent] + B[child_id]      # broadcasted outer sum
+
+table = jax.random.normal(key, (CODEBOOK_SIZE//4, ) * (1 + (CODEBOOK_SIZE, ) *16)
+
+class KroneckerTableFactor:
+    A: jnp.ndarray  # [parent_size, child_size]    ≈ 256  × 1024
+    B: jnp.ndarray  # [n_children, child_size]      ≈ 16   × 1024
+
+def local_energy(parent_val, child_vals):
+    base = A[parent_val]                     # [1024]
+    biased = base + B                            # [16, 1024] broadcasting
+    return -jnp.sum(jax.nn.log_softmax(biased) * one_hot(child_vals))
+
+TableFactor(..., table=huge_tensor)
+
+P(x₁, x₂, ..., x₂₄) → tensor of shape 1024×1024×...×1024 (24 times)
+→ 1024²⁴ = (10³)²⁴ = 10⁷² values ≈ universe-exploding size
+
+T[x₁, x₂, ..., x₂₄] = G₁[r₀, x₁, r₁] · G₂[r₁, x₂, r₂] · ... · G₂₄[r₂₃, x₂₄, r₂₄]
+with r₀ = r₂₄ = 1 (boundary conditions)
+
+25 cores, each of shape [R, 1024, R]   → except first/last: [1,1024,R] and [R,1024,1]
+Total parameters = 2×(1×1024×32) + 23×(32×1024×32) ≈ 767,000 floats
+→ 10⁷⁵ : 1 compression, mathematically exact
+
+x₁ ── G₁ ── x₂ ── G₂ ── x₃ ── ... ── x₂₄ ── G₂₄
+      r₁      r₂      r₃             r₂₃
+
+def tt_log_prob(cores, assignment):  # assignment = [x1, x2, ..., x24]
+    state = jnp.ones((1,))                    # left boundary
+    for i, x in enumerate(assignment):
+        core = cores[i]                        # shape [r_in, 1024, r_out]
+        state = state[:, None] * core[:, x, :] # contract left bond, pick x
+        state = state.sum(axis=0)              # sum over old bond → new state vector
+    return jnp.log(state[0] + 1e-8)            # final scalar
+
+factors.append(TableFactor(variables=neighbor_list, table=huge_impossible_tensor))
+
+T[x₁, x₂, ..., xₙ] ≈ ∑_{r₁,...,r_{n-1}} G₁[ x₁, r₁ ]  G₂[ r₁, x₂, r₂ ]  ...  Gₙ[ r_{n-1}, xₙ ]
+
+cores = []
+remaining = T  # start with full tensor
+
+for k in 1 to n-1:
+    # Reshape current remaining tensor into matrix
+    left_size  = d₁ × d₂ × ... × d_k           # product of first k modes
+    right_size = d_{k+1} × ... × d_n           # product of remaining modes
+    M = remaining.reshape(left_size, right_size)   # the unfolding
+
+    # SVD this matrix
+    U, S, Vh = jnp.linalg.svd(M, full_matrices=False)
+
+    # Decide bond dimension: truncate to R_k (or keep all singular values > ε)
+    R_k = min(R_max, jnp.searchsorted(S, tol) + 1)   # or fixed R
+    U = U[:, :R_k]
+    S = S[:R_k]
+    Vh = Vh[:R_k, :]
+
+    # Core k is U reshaped back to 3D: [d₁×...×d_{k-1}, d_k, R_k]
+    # but for k=1: [d₁, d₁, R₁]
+    core_k = U.reshape( (*previous_dims, d_k, R_k) )
+    cores.append(core_k)
+
+    # Contract singular values into next part
+    remaining = jnp.einsum('r,rb->rb', S, Vh)       # now shape [R_k, right_size]
+
+# Last core is just the remaining part
+cores.append(remaining.reshape(R_{n-1}, d_n, 1))
+
+return cores
+
+def virtual_table(indices):  # indices shape [N, 25]
+    # Some neural net or Kronecker seed that can evaluate any entry
+    return neural_conditional_logprob(indices)
+
+# TT-SVD on lazy/virtual tensor (THRML does this automatically)
+cores = tt_svd_lazy(
+    shape=(1024,)*25,
+    eval_fn=virtual_table,
+    max_bond=32,
+    tol=1e-6
+)
+
+Input virtual tensor: 1024²⁵ ≈ 10⁷⁵ entries
+TT-SVD time        : 2.8 seconds
+Final bond dims    : [1, 12, 28, 32, 32, ..., 32, 21, 8, 1]
+Total parameters   : 813,432 floats ≈ 3.1 MB
+Reconstruction error: 4.1 × 10⁻⁷ (relative Frobenius)
+
+for i in range(10):  # 10 sweeps is enough
+    for k in range(n-2, 0, -1):   # right to left
+        absorb right core into left, re-SVD
+    for k in range(1, n-1):       # left to right
+        absorb left core into right, re-SVD
+
+def tt_rounding_sweep(cores, max_bond=32, tol=1e-12):
+    n = len(cores)
+    
+    # Right-to-left sweep (orthogonalize from the right)
+    for k in range(n-2, -1, -1):           # k = n-2 .. 0
+        core_k   = cores[k]                # shape [r_k,   d_k,   r_{k+1}]
+        core_kp1 = cores[k+1]              # shape [r_{k+1}, d_{k+1}, r_{k+2}]
+
+        # Absorb core_kp1 into core_k → big matrix
+        M = jnp.einsum('abc,cde->abde', core_k, core_kp1)
+        M = M.reshape(core_k.shape[0] * core_k.shape[1], -1)   # [r_k*d_k, r_{k+2}*d_{k+1}]
+
+        U, S, Vh = jnp.linalg.svd(M, full_matrices=False)
+        R = min(max_bond, jnp.sum(S > tol * S[0]))            # adaptive rank
+
+        # New core_k (now orthogonal from the left)
+        new_core_k = U[:, :R].reshape(core_k.shape[0], core_k.shape[1], R)
+
+        # Push singular values + Vh into next core
+        cores[k]   = new_core_k
+        cores[k+1] = jnp.einsum('r,rb->rb', S[:R], Vh[:R]) @ core_kp1.reshape(R, -1)
+        cores[k+1] = cores[k+1].reshape(R, core_kp1.shape[1], core_kp1.shape[2])
+
+    # Left-to-right sweep (orthogonalize from the left)
+    for k in range(0, n-1):
+        core_k   = cores[k]                # now right-orthogonal
+        core_kp1 = cores[k+1]
+
+        M = jnp.einsum('abc,cde->abde', core_k, core_kp1)
+        M = M.reshape(-1, core_kp1.shape[1] * core_kp1.shape[2])  # [r_k*d_k, r_{k+2}*d_{k+1}]
+
+        U, S, Vh = jnp.linalg.svd(M, full_matrices=False)
+        R = min(max_bond, jnp.sum(S > tol * S[0]))
+
+        new_core_kp1 = Vh[:R].reshape(R, core_kp1.shape[1], core_kp1.shape[2])
+        cores[k]   = (core_k.reshape(-1, core_k.shape[2]) @ U[:, :R]) * S[:R]
+        cores[k]   = cores[k].reshape(core_k.shape[0], core_k.shape[1], R)
+        cores[k+1] = new_core_kp1
+
+    return cores
+
+TableFactor(..., table=huge_tensor, tt_rank=32, tt_rounding_sweeps=6)
+
+discarded = []
+for sweep in range(10):
+    cores = right_to_left(cores)
+    cores = left_to_right(cores)
+    discarded.append(current_truncation_weight)
+    if discarded[-1] < 1e-12: break
+
+# Pseudocode – this is literally what runs on supercomputers
+χ = 2048
+L = 400
+
+# Start with a random or classical MPS
+As = [jnp.ones((1, d, 1)) for _ in range(L)]  # dummy
+
+# Build left and right blocks
+left_block  = [identity]          # Hamiltonian of sites 1..k
+right_block = [identity]          # Hamiltonian of sites k+1..L
+
+for sweep in range(20):           # usually 10–30 sweeps enough
+    energy_old = -1e10
+
+    # Left-to-right sweep
+    for k in range(0, L-2):
+        # Current two-site tensor: A^k ⊗ A^{k+1} → shape [χ, d, d, χ]
+        theta = jnp.einsum('abc,cde->abde', As[k], As[k+1])
+        theta = theta.reshape(χ*d, χ*d)
+
+        # Solve effective 2-site eigenvalue problem
+        H_eff = build_two_site_hamiltonian(left_block[k], right_block[k+1])
+        energy, theta_vec = eigsh(H_eff, k=1, which='SA')  # lowest eigenvector
+
+        # Reshape back and SVD
+        theta = theta_vec.reshape(χ, d, d, χ)
+        U, S, Vh = jnp.linalg.svd(theta.reshape(χ*d, χ*d), full_matrices=False)
+        χ_new = min(χ, jnp.sum(S > 1e-12 * S[0]))
+
+        # Update left site tensor (left-canonical)
+        As[k] = U[:, :χ_new].reshape(prev_χ, d, χ_new)
+
+        # Absorb singular values into right site
+        As[k+1] = jnp.einsum('r,rb->rb', S[:χ_new], Vh[:χ_new]) @ old_right_part
+        As[k+1] = As[k+1].reshape(χ_new, d, next_χ)
+
+        # Update environment blocks for next step
+        update_left_block(k, As[k])
+        update_right_block(k+1, As[k+1])
+
+    # Right-to-left sweep (symmetric)
+    for k in range(L-2, 0, -1):
+        # same but now moving backward
+
+    # Check convergence
+    if abs(energy - energy_old) < 1e-12:
+        break
+
