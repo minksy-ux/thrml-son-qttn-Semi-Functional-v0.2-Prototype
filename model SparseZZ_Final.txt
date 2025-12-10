@@ -1,0 +1,41 @@
+model SparseZZ_Final is QuantumHamiltonianEBM
+{
+    visible v[784] : QubitNode;
+    hidden  h[512] : QubitNode;
+    qubits = v ++ h;
+
+    // Fixed 8-neighbor torus connectivity (28×28 → 512 via mod)
+    function fixed_k8_neighbors(i : visible_index) → [8] hidden_index
+    {
+        r = i / 28; c = i % 28;
+        nbrs = [ (r,   c+1), (r,   c-1),
+                 (r+1, c),   (r-1, c),
+                 (r+1, c+1), (r+1, c-1),
+                 (r-1, c+1), (r-1, c-1) ];
+        return nbrs.map(p → (p.row%28)*28 + p.col%28).map(idx → idx % 512);
+    }
+
+    connections SparseZZ[6272]
+    {
+        for i in 0..783
+            for j in fixed_k8_neighbors(i)
+                link v[i] ↔ h[j]
+                    strength J[i,j] ∈ ℝ trainable
+                    type ZZ
+                    symmetry Symmetric
+                    hardware FixedCapacitiveCoupler;
+    }
+
+    Hamiltonian H =
+          ∑ b_v[i] σᶻ(v[i]) + ∑ b_h[j] σᶻ(h[j])
+        + ∑_{edges} J[i,j] σᶻ(v[i])⊗σᶻ(h[j])
+        + Γ(t) ∑ σˣ(h[j]);
+
+    transverse Γ(t) { start=6.0; end=0.0005; decay=exponential; }
+
+    representation MPO { bond_limit=96; compression=TT_SVD + DMRG_sweeps(10); }
+
+    sampler PhysicalAnnealing { anneal Γ; read v; }
+    train = ContrastiveDivergence { ∇J = ⟨σᶻσᶻ⟩₊ − ⟨σᶻσᶻ⟩₋; }
+    generate { anneal_from_hot; return v; }
+}
