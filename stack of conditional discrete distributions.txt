@@ -1,0 +1,18 @@
+Level 2:   2×2   grid  (very coarse, 256 symbols)        ← z₂
+              ↓  (each parent controls 16 children)
+Level 1:   8×8   grid  (medium, 256 symbols)            ← z₁
+              ↓  (each parent controls 16 children)
+Level 0:  32×32  grid  (fine, 1024 symbols)           ← z₀  (this is what we store/transmit)
+              ↓  (each z₀ controls 16×16 = 256 actual RGB pixels)
+Pixels:   512×512 color image
+
+for each parent node in z₁ (8×8 = 64 variables):
+    children = the 4×4 = 16 nodes in z₀ that sit spatially under it
+    TableFactor(
+        variables = [parent] + children,
+        table     = trainable array of shape (256, 1024, 1024, ..., 1024)   # 17 dimensions
+        # or heavily low-rank / Kronecker-factored in practice
+    )
+
+z₁[i,j] → z₁[i,j+1]   (and snake back on even rows)
+z₀[i,j] → z₀[i,j+1]
