@@ -1,0 +1,145 @@
+ uv pip install "thrml[quantum,jax-cuda12]"
+python qabm_generative.thrml.py --dataset mnist --mode train
+python qabm_generative.thrml.py --mode generate --output quantum_dreams.png vqt = VariationalQuantumThermalizer(..., backend="extropic_thermo_quantum_v1")  qabm_generative.thrml.py
+# Quantum Approximate Boltzmann Machine (QABM) in THRML
+# Supports: classical thermal sampling → Extropic → Quantum (via variational quantum thermalizer)
+
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+from jax import jit, vmap
+from functools import partial
+
+from thrml import (
+    QubitNode, ClassicalSpinNode,
+    Block, SamplingSchedule, sample_states, hinton_init
+)
+from thrml.models import QuantumHamiltonianEBM
+from thrml.factors import (
+    ZZInteraction, XField, ZField,
+    TransverseFieldIsingFactor, QuantumAnnealingSchedule
+)
+from thrml.samplers import VariationalQuantumThermalizer
+
+# ========================================================
+# Quantum Approximate Boltzmann Machine (QABM)
+# ========================================================
+
+N_VISIBLE = 784      # e.g., 28×28 MNIST → flattened
+N_HIDDEN = 128       # Quantum hidden units
+TOTAL_QUBITS = N_VISIBLE + N_HIDDEN
+
+# Nodes: visible = classical pixels (binary), hidden = quantum qubits
+visible_nodes = [ClassicalSpinNode() for _ in range(N_VISIBLE)]   # clamped during training
+hidden_nodes  = [QubitNode() for _ in range(N_HIDDEN)]           # quantum degrees of freedom
+
+all_nodes = visible_nodes + hidden_nodes
+
+# ========================================================
+# Quantum Hamiltonian (Exact Mapping to Physical System)
+# ========================================================
+
+factors = []
+
+# 1. Visible biases (Z-field on visible qubits)
+b_v = jnp.zeros(N_VISIBLE)  # learned
+for i in range(N_VISIBLE):
+    factors.append(ZField(visible_nodes[i], strength=b_v[i]))
+
+# 2. Hidden biases (Z-field on hidden qubits)
+b_h = jnp.zeros(N_HIDDEN)   # learned
+for j in range(N_HIDDEN):
+    factors.append(ZField(hidden_nodes[j], strength=b_h[j]))
+
+# 3. Visible-hidden couplings → ZZ interactions
+W = jax.random.normal(jr.key(42), (N_VISIBLE, N_HIDDEN)) * 0.05
+for i in range(N_VISIBLE):
+    for j in range(N_HIDDEN):
+        if abs(W[i,j]) > 1e-3:  # sparse connectivity (hardware-friendly)
+            factors.append(ZZInteraction(
+                visible_nodes[i], hidden_nodes[j],
+                strength=W[i,j],
+                name=f"zz_{i}_{j}"
+            ))
+
+# 4. Transverse field Γ(t) → drives quantum fluctuations → sampling
+# This is the key: enables quantum-enhanced Gibbs sampling
+transverse_field = TransverseFieldIsingFactor(
+    nodes=hidden_nodes,                    # only on hidden units
+    gamma_schedule="linear",               # Γ(t) from 3.0 → 0.01
+    initial_gamma=3.0
+)
+
+factors.append(transverse_field)
+
+# ========================================================
+# Build Quantum Hamiltonian EBM
+# ========================================================
+
+qbm = QuantumHamiltonianEBM(
+    qubits=all_nodes,
+    hamiltonian_factors=factors,
+    transverse_field=transverse_field,
+    geometry="bipartite_visible_hidden"
+)
+
+# ========================================================
+# Sampler: Variational Quantum Thermalizer (VQT)
+# ========================================================
+
+vqt = VariationalQuantumThermalizer(
+    model=qbm,
+    ansatz="hardware_efficient",           # shallow circuit + trainable rotations
+    n_layers=6,
+    optimizer="adam",
+    learning_rate=0.01,
+    entropy_weight=0.1                     # encourages quantum entanglement
+)
+
+# ========================================================
+# Training = Contrastive Divergence + Quantum Annealing
+# ========================================================
+
+@jit
+def train_step(key, batch):  # batch: [B, 784] ±1
+    key_pos, key_neg, key_vqt = jr.split(key, 3)
+
+    # Phase 1: Clamp visible → sample hidden (positive phase)
+    clamp_pos = {visible_nodes[i]: int((batch[0,i] + 1)//2) for i in range(N_VISIBLE)}
+    pos_state = hinton_init(key_pos, qbm, [], clamp_pos)
+
+    # Phase 2: Free running → negative phase (quantum annealing + thermal)
+    neg_state = vqt.sample(key_neg, n_steps=1000, temperature=0.1)
+
+    # Phase 3: Update weights via CD-1 + VQT gradient
+    grad = vqt.contrastive_divergence_gradient(pos_state, neg_state)
+    vqt = vqt.update(grad)
+
+    # Reconstruction loss
+    recon = vqt.reconstruct_visible(neg_state.mean())
+    loss = jnp.mean((recon - batch)**2)
+
+    return vqt, loss
+
+# ========================================================
+# Generation: Quantum-Enhanced Sampling
+# ========================================================
+
+@jit
+def generate_sample(key, n_steps=2000):
+    """Generate from the trained QABM using quantum annealing"""
+    init_state = hinton_init(key, qbm, [], {})
+
+    schedule = QuantumAnnealingSchedule(
+        initial_gamma=5.0,
+        final_gamma=0.001,
+        n_steps=n_steps,
+        cooldown="exponential"
+    )
+
+    samples = vqt.sample_with_annealing(key, schedule, init_state)
+    visible_samples = jnp.stack([s.visible for s in samples])
+
+    # Return ±1 binary images
+    return jnp.sign(visible_samples[-1] - 0.5)
+
