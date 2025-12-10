@@ -1,0 +1,170 @@
+// ========================================================
+// THRML v2.3 – Stochastic Oscillator Network (SON)
+// Architecture: Continuous Gaussian Sampling via Coupled RLC Dynamics
+// Features: PGN + Long Mamba Selective SSM + Pattern Compression States
+// Author: Experimental Thermodynamic AI Lab (2025)
+// ========================================================
+
+network SON_LongMamba_PGN
+{
+    // ----------------------------------------------------
+    // Global Thermal & Physical Parameters
+    // ----------------------------------------------------
+    temperature = 300 K;
+    boltzmann kB = 1.380649e-23 J/K;
+    hbar = 1.0545718e-34 J⋅s;
+    noise floor = thermal;                  // Johnson-Nyquist noise enabled
+    sampling continuous;                     // True continuous-time dynamics
+
+    // ----------------------------------------------------
+    // Core Stochastic Oscillator Bank (SON Core)
+    // ----------------------------------------------------
+    oscillator_bank SON_Core[1024]
+    {
+        type = RLC;
+        R = 5.0 kΩ ± 15% gaussian;           // Resistive damping (stochasticity
+        L = 10 nH ± 10% gaussian;
+        C = 100 pF ± 12% gaussian;
+
+        coupling topology = small_world(k=8, p_rewire=0.15);
+        coupling_strength = 50 nS ± 20% gaussian;  // Conductance-based
+
+        // Thermal noise injection (enables Gaussian sampling)
+        noise johnson_nyquist = sqrt(4 * kB * T * R * Δf);
+        drive = none;  // Purely noise-driven for sampling mode
+    }
+
+    // ----------------------------------------------------
+    // PGN Layer – Probabilistic Gaussian Nodes
+    // ----------------------------------------------------
+    layer PGN[512]
+    {
+        input from SON_Core via linear_readout W_pgn[1024×512] 
+             init = xavier_gaussian(std=0.02);
+
+        activation = gaussian_sample(
+                        μ = W_pgn × x_SON,
+                        σ = softplus(W_sigma × |x_SON| + b_sigma)
+                    );
+
+        // Re-parameterization trick for backprop-through-sampling
+        sampling reparameterized;
+        noise_source = standard_gaussian;
+    }
+
+    // ----------------------------------------------------
+    // Long Mamba Selective SSM Block (Compressed State Path)
+    // ----------------------------------------------------
+    ssm LongMamba
+    {
+        state_dim = 64;                          // Extreme compression
+        expansion_factor = 2;
+        d_conv = 4;
+        dt_proj_bias = true;
+
+        // Selective parameters A, B, C, Δ computed via tiny MLPs
+        A = exp(-exp(A_log)[state_dim]);
+        B = B_proj(PGN)[state_dim];
+        C = C_proj(PGN)[output_dim];
+        Δ = softplus(Δ_proj(PGN));
+
+        // Discretization: parallel scan compatible
+        discretization = zoh;                    // Zero-order hold (physical time)
+
+        // Pattern Compression States (PCS)
+        // Stores sparse high-energy oscillatory modes for long contexts
+        compression_memory PCS_Buffer[128]
+        {
+            trigger = energy(x_SON) > quantile(0.98);
+            store    = top_k_modes(x_SON, k=8);
+            decay    = exponential(τ=10 ms);
+            retrieve = attention_over(PCS_Buffer, query=PGN);
+        }
+    }
+
+    // ----------------------------------------------------
+    // Recurrent Connection: Long Mamba → SON_Core (feedback)
+    // ----------------------------------------------------
+    feedback LongMamba_to_SON
+    {
+        W_fb[64×1024] init = sparse_gaussian(sparsity=0.92, std=0.01);
+        injection = current_source into SON_Core nodes;
+        gain = 2.0 nA per unit output;
+    }
+
+    // ----------------------------------------------------
+    // Readout Head (Task-adaptive)
+    // ----------------------------------------------------
+    readout Head
+    {
+        input from LongMamba hidden;
+        layer fc1 256 relu;
+        layer fc2 output_dim;
+        loss = default;  // Will be set per task
+    }
+
+    // ----------------------------------------------------
+    // Training & Physical Constraints
+    // ----------------------------------------------------
+    training
+    {
+        optimizer = AdamW(lr=3e-4, weight_decay=1e-5);
+        gradient_clipping = 1.0;
+
+        // Physics-aware regularization
+        regularize energy(SON_Core) < 50 pW average;
+        regularize spectral_entropy(SON_Core) > 4.5;  // Encourage rich dynamics
+        regularize PCS_Buffer occupancy < 0.3;
+    }
+
+    // ----------------------------------------------------
+    // Runtime Modes
+    // ----------------------------------------------------
+    mode sampling
+    {
+        // Pure Gaussian sampling – no input, just thermal fluctuations
+        input = zero;
+        output = covariance(SON_Core) → Gaussian distribution;
+    }
+
+    mode reservoir_computing
+    {
+        input → virtual_node_injection(SON_Core, delay=12);
+        readout = Head;
+    }
+
+    mode generative
+    {
+        feedback gain *= 1.8;           // Slightly chaotic regeneration
+        output = stream(Head, t→∞);
+    }
+}
+
+// ========================================================
+// Usage Examples
+// ========================================================
+
+task Gaussian_Sampling
+{
+    load SON_LongMamba_PGN;
+    set mode sampling;
+    run for 10 ms;
+    collect samples 1e6;
+    verify isotropic_gaussian(tolerance=0.05);
+}
+
+task Long_Sequence_Modeling
+{
+    load SON_LongMamba_PGN;
+    dataset = LongRangeArena;
+    set mode reservoir_computing;
+    train epochs=200;
+    evaluate accuracy;
+}
+
+task Unconditional_Generation
+{
+    load SON_LongMamba_PGN;
+    set mode generative;
+    generate length=4096 tokens;
+}
