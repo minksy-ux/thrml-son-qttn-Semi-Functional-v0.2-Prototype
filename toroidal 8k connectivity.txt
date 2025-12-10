@@ -1,0 +1,22 @@
+ 28×28 toroidal 8-connectivity → 512 hidden units
+# 6272 fixed ZZ couplers, translation-invariant, no routing hell
+
+connectivity SparseTorusK8 {
+    type   = SparseZZ
+    edges  = 6272
+    degree = 8
+
+    for i in 0..783 {
+        r = i / 28
+        c = i % 28
+
+        couple v[i] ↔ h[ ( (r+0)%28 * 28 + (c+1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r+0)%28 * 28 + (c-1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r+1)%28 * 28 + (c+0)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r-1)%28 * 28 + (c+0)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r+1)%28 * 28 + (c+1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r+1)%28 * 28 + (c-1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r-1)%28 * 28 + (c+1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+        couple v[i] ↔ h[ ( (r-1)%28 * 28 + (c-1)%28 ) % 512 ]   J_trainable  FixedCapacitive
+    }
+}
