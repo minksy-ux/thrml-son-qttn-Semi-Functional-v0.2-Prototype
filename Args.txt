@@ -1,0 +1,279 @@
+Args:
+    N: number of oscillators (dimensions)
+    dt: time step
+    T: total simulation time
+    K: symmetric coupling matrix (N x N). If None, a default symmetric K is used.
+    omega: intrinsic frequencies array of length N. If None, uses ones.
+    sigma: noise strength (Gaussian, per time step)
+    rng: numpy.random.Generator instance (optional)
+    warmup_fraction: fraction of trajectory to discard as transient
+    seed: seed for RNG if rng is None
+
+Returns:
+    samples: array of shape (num_samples_after_warmup, N)
+"""
+if rng is None:
+    rng = np.random.default_rng(seed)
+
+steps = int(np.round(T / dt))
+if steps < 2:
+    raise ValueError("T/dt must give at least 2 steps")
+
+if K is None:
+    K = np.array([[0.0, 0.5, 0.2], [0.5, 0.0, 0.3], [0.2, 0.3, 0.0]])
+K = np.asarray(K, dtype=float)
+if K.shape != (N, N):
+    raise ValueError("K must be shape (N, N)")
+
+if omega is None:
+    omega = np.ones(N, dtype=float)
+omega = np.asarray(omega, dtype=float)
+if omega.shape != (N,):
+    raise ValueError("omega must be shape (N,)")
+
+# Use Laplacian L = diag(sum_j K_ij) - K so that
+# sum_j K_ij (V_j - V_i) = (K @ V) - diag(sum) * V = - L @ V
+L = np.diag(K.sum(axis=1)) - K
+
+V = np.zeros((steps, N), dtype=float)
+V[0] = rng.normal(size=N)
+
+sqrt_dt = np.sqrt(dt)
+for t in range(1, steps):
+    # coupling term: -L @ V
+    coupling = -L @ V[t - 1]
+    # restoring term (like a second-order oscillator reduced to linear restoring)
+    restoring = - (omega**2) * V[t - 1]
+    noise = rng.normal(scale=sigma, size=N)
+    dV = coupling + restoring + noise
+    V[t] = V[t - 1] + dt * dV
+
+start = int(np.floor(steps * warmup_fraction))
+samples = V[start:, :]
+return samples Simulation utilities
+-----------------------
+def simulate_son( N: int = 3, dt: float = 0.01, T: float = 50.0, K: Optional[np.ndarray] = None, omega: Optional[np.ndarray] = None, sigma: float = 0.1, rng: Optional[np.random.Generator] = None, warmup_fraction: float = 0.5, seed: Optional[int] = 0, ) -> np.ndarray: """ Simulate a simple coupled oscillator/neural-voltage model (Euler-Maruyama).
+
+Code
+Args:
+    N: number of oscillators (dimensions)
+    dt: time step
+    T: total simulation time
+    K: symmetric coupling matrix (N x N). If None, a default symmetric K is used.
+    omega: intrinsic frequencies array of length N. If None, uses ones.
+    sigma: noise strength (Gaussian, per time step)
+    rng: numpy.random.Generator instance (optional)
+    warmup_fraction: fraction of trajectory to discard as transient
+    seed: seed for RNG if rng is None
+
+Returns:
+    samples: array of shape (num_samples_after_warmup, N)
+"""
+if rng is None:
+    rng = np.random.default_rng(seed)
+
+steps = int(np.round(T / dt))
+if steps < 2:
+    raise ValueError("T/dt must give at least 2 steps")
+
+if K is None:
+    K = np.array([[0.0, 0.5, 0.2], [0.5, 0.0, 0.3], [0.2, 0.3, 0.0]])
+K = np.asarray(K, dtype=float)
+if K.shape != (N, N):
+    raise ValueError("K must be shape (N, N)")
+
+if omega is None:
+    omega = np.ones(N, dtype=float)
+omega = np.asarray(omega, dtype=float)
+if omega.shape != (N,):
+    raise ValueError("omega must be shape (N,)")
+
+# Use Laplacian L = diag(sum_j K_ij) - K so that
+# sum_j K_ij (V_j - V_i) = (K @ V) - diag(sum) * V = - L @ V
+L = np.diag(K.sum(axis=1)) - K
+
+V = np.zeros((steps, N), dtype=float)
+V[0] = rng.normal(size=N)
+
+sqrt_dt = np.sqrt(dt)
+for t in range(1, steps):
+    # coupling term: -L @ V
+    coupling = -L @ V[t - 1]
+    # restoring term (like a second-order oscillator reduced to linear restoring)
+    restoring = - (omega**2) * V[t - 1]
+    noise = rng.normal(scale=sigma, size=N)
+    dV = coupling + restoring + noise
+    V[t] = V[t - 1] + dt * dV
+
+start = int(np.floor(steps * warmup_fraction))
+samples = V[start:, :]
+return samples
+-----------------------
+Joint histogram -> probability tensor
+-----------------------
+def joint_probability_tensor( samples: np.ndarray, bins: int = 4, value_range: Tuple[float, float] = (-2.0, 2.0), ) -> Tuple[np.ndarray, List[np.ndarray]]: """ Make a joint probability mass tensor from samples.
+
+Code
+Args:
+    samples: array shape (M, N)
+    bins: number of bins per dimension (int or sequence)
+    value_range: tuple (min, max) for clipping and histogram range
+
+Returns:
+    pmf: ndarray shape (bins,)*N with sum(pmf) == 1 (probability mass)
+    edges: list of arrays (bin edges for each dim)
+"""
+samples = np.asarray(samples, dtype=float)
+if samples.ndim != 2:
+    raise ValueError("samples must be 2D array (num_samples, N)")
+N = samples.shape[1]
+
+if isinstance(bins, int):
+    bins_arg = [bins] * N
+else:
+    bins_arg = list(bins)
+    if len(bins_arg) != N:
+        raise ValueError("bins must be int or sequence of length N")
+
+ranges = [value_range] * N
+counts, edges = np.histogramdd(samples, bins=bins_arg, range=ranges, density=False)
+total = counts.sum()
+if total == 0:
+    raise RuntimeError("Histogram produced zero counts; check value_range or samples")
+pmf = counts.astype(float) / float(total)
+return pmf, edges
+-----------------------
+TT-SVD (Oseledets) implementation
+-----------------------
+def tt_svd( tensor: np.ndarray, max_ranks: Optional[List[int]] = None, eps: float = 1e-6, energy_tol: float = 1e-12, ) -> Tuple[List[np.ndarray], List[int]]: """ Compute the Tensor-Train (TT) decomposition of tensor using TT-SVD.
+
+Code
+Args:
+    tensor: ndarray with shape (n1, n2, ..., nd)
+    max_ranks: optional list of maximum allowed ranks r1..r_{d-1}
+               If provided, length must be d-1. If None, no explicit cap.
+    eps: absolute truncation tolerance on singular values (unused directly if energy_tol used)
+    energy_tol: relative energy tolerance for truncation.
+                We keep the minimal r such that sum_{i>r} s_i^2 <= energy_tol * sum s_i^2.
+
+Returns:
+    cores: list of TT cores; core k has shape (r_{k-1}, n_k, r_k), r_0=r_d=1
+    ranks: list of ranks [r1, r2, ..., r_{d-1}]
+"""
+X = np.asarray(tensor, dtype=float)
+dims = list(X.shape)
+d = len(dims)
+if d < 1:
+    raise ValueError("tensor must have at least one dimension")
+
+if max_ranks is not None:
+    if len(max_ranks) != d - 1:
+        raise ValueError("max_ranks must have length d-1")
+
+cores: List[np.ndarray] = []
+r_prev = 1
+current = X.copy()
+ranks: List[int] = []
+
+for k in range(d - 1):
+    n_k = dims[k]
+    # reshape current into (r_prev * n_k) x rest
+    left_dim = r_prev * n_k
+    rest = int(np.prod(dims[k + 1 :]))
+    mat = current.reshape(left_dim, rest)
+
+    # SVD
+    U, S, Vh = np.linalg.svd(mat, full_matrices=False)
+    s2 = S**2
+    total_energy = s2.sum()
+    if total_energy == 0:
+        # everything is zero after this point; ranks are 1
+        r_k = 1
+    else:
+        # choose minimal r to satisfy energy tolerance
+        cumsum = np.cumsum(s2)
+        keep_energy = 1.0 - energy_tol
+        idx = np.searchsorted(cumsum, keep_energy * total_energy)
+        r_k = max(1, idx + 1)  # idx is index where cumulative >= target
+    # cap by max_ranks if provided
+    if max_ranks is not None and max_ranks[k] is not None:
+        r_k = min(r_k, max(1, int(max_ranks[k])))
+
+    # also guard by available singular values
+    r_k = min(r_k, len(S))
+
+    # build core: U has shape (left_dim, r_k)
+    U_trunc = U[:, :r_k]
+    core = U_trunc.reshape((r_prev, n_k, r_k))
+    cores.append(core)
+    ranks.append(r_k)
+
+    # form next current = diag(S_trunc) @ Vh_trunc -> shape (r_k, rest)
+    S_trunc = S[:r_k]
+    Vh_trunc = Vh[:r_k, :]
+    current = (np.diag(S_trunc) @ Vh_trunc)
+
+    r_prev = r_k
+
+# final core: current has shape (r_{d-1}, n_d)
+final_core = current.reshape((r_prev, dims[-1], 1))
+cores.append(final_core)
+return cores, ranks
+def tt_reconstruct(cores: List[np.ndarray]) -> np.ndarray: """ Reconstruct a full tensor from TT cores.
+
+Code
+Args:
+    cores: list of arrays with shapes (r_{k-1}, n_k, r_k)
+
+Returns:
+    tensor: full ndarray of shape (n1, n2, ..., nd)
+"""
+# start with first core: shape (1, n1, r1)
+T = cores[0]
+for core in cores[1:]:
+    # contract last axis of T with first axis of core
+    T = np.tensordot(T, core, axes=([-1], [0]))  # resulting shape expands dims
+    # tensordot puts contracted axes at the end; reorder so that
+    # the core's middle axis (n_k) is in the right place automatically
+# After chain contraction, T shape is (1, n1, n2, ..., nd, 1)
+# remove the singleton boundary ranks
+# Move all middle axes to form final tensor shape (n1, n2, ..., nd)
+# squeeze out the first and last dims
+final = np.squeeze(T, axis=(0, -1))
+return final
+def relative_error(A: np.ndarray, B: np.ndarray) -> float: """ Relative Frobenius norm error ||A-B|| / ||A|| """ num = np.linalg.norm(A - B) den = np.linalg.norm(A) if den == 0: return float("inf") if num != 0 else 0.0 return float(num / den)
+
+-----------------------
+Example usage (if run as script)
+-----------------------
+if name == "main": # Simulation parameters N = 3 dt = 0.01 T = 50.0 sigma = 0.1 rng = np.random.default_rng(42)
+
+Code
+# Example symmetric coupling
+K = np.array([[0.0, 0.5, 0.2], [0.5, 0.0, 0.3], [0.2, 0.3, 0.0]])
+omega = np.ones(N) * 1.0
+
+samples = simulate_son(N=N, dt=dt, T=T, K=K, omega=omega, sigma=sigma, rng=rng)
+print("Samples shape:", samples.shape)
+
+# Build joint probability tensor (pmf sums to 1)
+bins = 4
+pmf, edges = joint_probability_tensor(samples, bins=bins, value_range=(-2.0, 2.0))
+print("PMF shape:", pmf.shape, "sum:", pmf.sum())
+
+# TT-SVD: choose either max_ranks or let energy_tol decide truncation
+cores, ranks = tt_svd(pmf, max_ranks=[2] * (pmf.ndim - 1), energy_tol=1e-8)
+print("Core shapes:", [c.shape for c in cores])
+print("Ranks:", ranks)
+
+# Reconstruct and compute relative error
+recon = tt_reconstruct(cores)
+err = relative_error(pmf, recon)
+print("Relative reconstruction error:", err)
+Code
+
+Notes / rationale:
+- The Laplacian L = diag(sum) - K makes the coupling term much clearer and avoids repeated constructions inside the loop.
+- The histogram now returns a probability mass (counts/total) that sums to 1; this is the correct object for a discrete joint PMF (rather than density=True from histogramdd which returns densities, not a pmf summing to 1).
+- The TT-SVD follows the standard successive-SVD approach (Oseledets): each core has shape (r_{k-1}, n_k, r_k). Truncation is energy-based (keeps singular values capturing almost all energy) and can be capped by max_ranks.
+- Everything is organized into small functions so you can reuse, test, or extend parts easily (e.g
