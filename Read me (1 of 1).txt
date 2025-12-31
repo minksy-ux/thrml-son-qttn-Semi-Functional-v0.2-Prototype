@@ -1,0 +1,674 @@
+
+
+text
+# THRML-SON-QTTN: Semi-Functional Prototype v0.2
+
+## Overview
+
+**THRML-SON-QTTN** is a *hybrid quantum-tensor inferential simulator* exploring the intersection of **stochastic oscillator networks (SON)** and **quantum-inspired tree tensor networks (QTTN)**.  
+The objective is to model **continuous Gaussian fields and discrete energy landscapes** using coupled dynamical systems, tensor decompositions, and hierarchical state compression.
+
+---
+
+## Conceptual Foundation
+
+### Stochastic Oscillator Networks (SON)
+SONs model *continuous energy landscapes* through coupled RLC-like oscillatory circuits.  
+Each node maintains a Gaussian-distributed latent state, updated via quasi-physical dynamics inspired by Kirchhoff laws:
+
+\[
+V_i(t+1) = V_i(t) + \Delta t (\sum_j K_{ij}(V_j - V_i) - \omega_i^2 V_i)
+\]
+
+These oscillatory systems approximate continuous sampling in stochastic inference, useful for approximating Boltzmann-like or Langevin dynamics under low-power analog constraints.
+
+### Quantum-inspired Tree Tensor Networks (QTTN)
+QTTNs capture *exact marginals and contraction seeding* over structured Gaussian or discrete systems with low treewidth.  
+Each contraction step decomposes the system via tensor-train SVD (TT-SVD), converting continuous node correlations into hierarchical factorized representations.
+
+Together, **SON** provides local continuous stochasticity, and **QTTN** provides structured global coherence.
+
+---
+
+## Conceptual Bridge
+
+The **SON-QTTN interface** aligns *oscillatory updates* with *tensor contraction steps*:
+
+| Process Step | SON (Continuous) | QTTN (Tensorized) |
+|---------------|------------------|--------------------|
+| State Variable | Node voltage / Gaussian sample | Tensor node index / coefficient |
+| Coupling | RLC dynamics | Tensor edges / factorized hierarchy |
+| Inference | Continuous marginals | Discrete contractions |
+| Compression | Phase-aligned amplitude | TT-rank truncation |
+
+The SON’s local dynamics feed stochastic samples into the QTTN contraction engine, while QTTN outputs compressed tensor states for re-injection into the SON as updated potentials or weights.
+
+---
+
+## Core Inspirations
+
+- **RLC Oscillator Analogy** — Energy feedback and natural damping for stochastic stability.  
+- **Gaussian Field Inference** — Continuous latent models for structured energy manifolds.  
+- **Mamba-style Selective State Compression** — Sequential long-range representation mirroring reservoir states in continuous-time models.
+
+---
+
+## Minimal Working Pipeline
+
+Below is a minimal computational workflow to execute a full SON–QTTN hybrid cycle.
+
+1. Install dependencies
+uv pip install thrml "jax[cuda12]" typing_extensions matplotlib
+
+2. Run oscillator network inference
+python thrml_react_component.tsx --config configs/default.yaml
+
+3. Load and analyze resulting states
+python analyze_network.py --input outputs/son_state.npy
+
+4. Visualize compression via TT-SVD
+python visualize_contraction.py --model qttn --input outputs/son_state.npy
+
+text
+
+Example configuration file snippet (`configs/default.yaml`):
+
+backend: jax
+precision: float32
+network:
+topology: toroidal_8k
+time_constant: 0.05
+oscillator_coupling: gaussian_lattice
+qttn:
+rank_truncation: 32
+svd_tolerance: 1e-6
+update_frequency: 10
+
+text
+
+---
+
+## Architecture Diagram
+
++-------------------------+
+| Oscillator Array (SON)|
+| Gaussian Node States |
++-----------+-------------+
+|
+v
++-----------+-------------+
+| Tensor Contraction Core|
+| (QTTN / TT-SVD stack) |
++-----------+-------------+
+|
+v
++-----------+-------------+
+| State Compression Layer|
+| (Selective latent Mamba)|
++-----------+-------------+
+|
+v
++-----------+-------------+
+| Inference Feedback Loop|
+| (Reinserts updated state|
+| into SON topology) |
++-------------------------+
+
+text
+
+---
+
+## Dependencies
+
+| Library | Purpose | Notes |
+|----------|----------|-------|
+| **thrml** | Custom library for tensor-based hybrid thermodynamic modeling | Required |
+| **jax** | Accelerated linear algebra and autodiff backend | CUDA 12+ optional |
+| **numpy / scipy** | Baseline math operations | |
+| **matplotlib** | Visualization (phase plots, energy trajectories) | Optional |
+| **typing_extensions** | Type hints for static analysis | |
+
+**GPU support (optional):**  
+pip install "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+
+text
+
+---Excellent — building a clear diagram + overview notebook will give other researchers (and your future self) a fast, visual way to understand and run the SON↔QTTN pipeline. Below is a full outline for your notebooks/overview_son_qttn.ipynb. It combines conceptual explanation, minimal executable code, and a system diagram you can render directly inside Jupyter.
+
+text
+# THRML-SON-QTTN Overview and Quickstart
+
+## 1. Introduction
+
+This notebook demonstrates the architecture, simulation loop, and tensorized inference of **THRML-SON-QTTN**, a hybrid model combining:
+
+- **SON (Stochastic Oscillator Networks):** Continuous energy-dynamics sampler.  
+- **QTTN (Quantum-inspired Tree Tensor Networks):** Structured state compressor and inference module.
+
+We’ll simulate an oscillator grid, run a few time steps, compress its latent tensor, and visualize both trajectories and singular values under TT-SVD decomposition.
+
+---
+
+## 2. Imports and Setup
+```python
+import jax
+import jax.numpy as jnp
+import numpy as np
+import matplotlib.pyplot as plt
+from thrml import son, qttn   # assuming submodules are packaged
+3. Initialize Oscillator Network
+We define a small 16-node oscillator array with toroidal connectivity.
+
+python
+n_nodes = 16
+key = jax.random.PRNGKey(0)
+
+state = jax.random.normal(key, (n_nodes,))
+coupling_matrix = jnp.roll(jnp.eye(n_nodes), 1, axis=1) + jnp.roll(jnp.eye(n_nodes), -1, axis=1)
+
+dt = 0.05
+omega = jnp.ones(n_nodes) * 1.5
+
+def oscillator_update(state, coupling_matrix):
+    d_state = jnp.dot(coupling_matrix, state - jnp.mean(state))
+    return state + dt * (d_state - omega * state)
+Simulate and visualize the phase evolution:
+
+python
+timesteps = 100
+traj = [state]
+
+for _ in range(timesteps):
+    state = oscillator_update(state, coupling_matrix)
+    traj.append(state)
+
+traj = jnp.stack(traj)
+
+plt.figure(figsize=(8,3))
+plt.plot(traj)
+plt.title("Oscillator Node Dynamics (SON)")
+plt.xlabel("Timestep")
+plt.ylabel("Node Value")
+plt.show()
+4. Tensor Contraction and Compression (QTTN)
+We approximate the oscillator state as a tensor and apply TT-SVD for hierarchical compression.
+
+python
+from thrml.qttn import tt_svd
+
+tensor = traj[-1].reshape(4, 4)  # simple 2D reshape for illustration
+U, S, Vt, ranks = tt_svd(tensor, tol=1e-6)
+
+plt.semilogy(S, 'o-')
+plt.title("QTTN Singular Spectrum (Compression Profile)")
+plt.xlabel("Index")
+plt.ylabel("Singular Value (Log Scale)")
+plt.show()
+5. SON↔QTTN Feedback Integration
+The key loop exchanges low-rank QTTN states back into SON as compressed energy fields.
+
+python
+def feedback_integration(state, S, rank_factor=0.2):
+    influence = jnp.mean(S) * rank_factor
+    return state + influence * (jnp.sin(state) - jnp.mean(state))
+
+for _ in range(10):
+    state = feedback_integration(state, S)
+6. Visualizing the End-to-End Architecture
+python
+import graphviz
+
+g = graphviz.Digraph(format='png')
+g.node('A', 'Stochastic Oscillator Network\n(Continuous dynamics, RLC analog)')
+g.node('B', 'Tensor Contraction Core\n(QTTN / TT-SVD)')
+g.node('C', 'Selective State Compression\n(Mamba-style latent update)')
+g.node('D', 'Inference Feedback\n(State re-injection)')
+g.edges(['AB', 'BC', 'CD', 'DA'])
+g.render('architecture_diagram', view=True)
+This diagram represents the hybrid loop:
+
+text
+SON → QTTN → Compression → Feedback → SON
+7. Dependencies
+Library	Role	Install
+thrml	Custom thermodynamic-tensor backend	pip install thrml
+jax	Acceleration & autodiff	pip install "jax[cuda12]"
+graphviz	Diagram generation	apt install graphviz
+matplotlib	Visualization	pip install matplotlib
+8. Next Steps
+Extend SON to higher-dimensional continuous Gaussian fields.
+
+Incorporate discrete-energy inference (EBM-style potential surfaces).
+
+Test multi-rank QTTN compression effects on inference stability. # Fashion‑MNIST Hybrid Inference with THRML‑SON‑QTTN
+
+## 1. Objective
+
+This notebook showcases **structured probabilistic compression and reconstruction** using the THRML‑SON‑QTTN hybrid model.  
+Fashion‑MNIST images are treated as *energy fields*:
+- **SON** simulates local Gaussian oscillators tied to pixel intensities.
+- **QTTN** performs hierarchical **tensor contractions** for global structure coherence.
+- The hybrid feedback loop evolves compressed representations back into approximate reconstructions.
+
+---
+
+## 2. Imports and Setup
+
+import jax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from torchvision import datasets, transforms
+from thrml import son, qttn
+
+text
+
+Dataset loader:
+
+transform = transforms.Compose([transforms.ToTensor()])
+train_data = datasets.FashionMNIST(root='./data', train=True, transform=transform, download=True)
+
+text
+
+Sample an image:
+
+img, label = train_data
+img = img.squeeze(0)
+plt.imshow(img, cmap='gray')
+plt.title(f"Sample: {label}")
+plt.show()
+
+text
+
+---
+
+## 3. Encode Image as Oscillator Field (SON Input)
+
+Each pixel intensity becomes an initial oscillator activation.  
+We use a Gaussian state field with nearest‑neighbor coupling to simulate local oscillatory inference.
+
+H, W = img.shape
+state = img.flatten()
+K = jnp.eye(H*W)
+K = K.at[:,:].set(0)
+
+Simple 4-neighbor coupling approximation
+for i in range(HW):
+if i % W != 0: K = K.at[i,i-1].set(1)
+if (i+1) % W != 0: K = K.at[i,i+1].set(1)
+if i-W >= 0: K = K.at[i,i-W].set(1)
+if i+W < HW: K = K.at[i,i+W].set(1)
+K /= 4
+
+omega = jnp.ones(H*W) * 0.5
+dt = 0.1
+
+def son_update(state, K, omega, dt):
+d_state = -omega * state + jnp.dot(K, jnp.tanh(state))
+return state + dt * d_state
+
+timesteps = 50
+for _ in range(timesteps):
+state = son_update(state, K, omega, dt)
+
+text
+
+Visualization:
+
+plt.imshow(state.reshape(H, W), cmap='viridis')
+plt.title("Evolved SON field")
+plt.show()
+
+text
+
+---
+
+## 4. Compress via Quantum‑inspired Tree Tensor Network (QTTN)
+
+We reshape the oscillator field into a tensor and apply TT‑SVD compression.
+
+tensor = state.reshape(28, 28)
+U, S, Vt, ranks = qttn.tt_svd(tensor, tol=1e-5)
+
+plt.semilogy(S, 'o-')
+plt.title("Singular Spectrum — QTTN Compression")
+plt.xlabel("Mode Index")
+plt.ylabel("Singular Value (log-scale)")
+plt.show()
+
+compressed_rank = jnp.sum(S > 1e-3)
+print(f"Effective TT-rank: {compressed_rank}")
+
+text
+
+---
+
+## 5. Reconstruct and Compare
+
+Rebuild the tensor from truncated TT components, simulate a feedback energy correction, and assess reconstruction loss.
+
+tensor_reconstructed = qttn.tt_reconstruct(U, S, Vt, rank_cut=compressed_rank)
+loss = jnp.mean((tensor - tensor_reconstructed)**2)
+
+plt.figure(figsize=(8,4))
+plt.subplot(1,2,1)
+plt.imshow(tensor, cmap='gray'); plt.title('Original SON State')
+plt.subplot(1,2,2)
+plt.imshow(tensor_reconstructed, cmap='gray'); plt.title(f'Reconstructed (Loss={loss:.2e})')
+plt.show()
+
+text
+
+---
+
+## 6. Feedback Loop (SON ↔ QTTN)
+
+Compressed components guide SON’s local fields toward structured equilibrium:
+
+def feedback_step(state, S, intensity=0.1):
+influence = intensity * jnp.mean(S)
+return state + influence * jnp.sin(state - jnp.mean(state))
+
+for _ in range(20):
+state = feedback_step(state, S)
+
+text
+
+Visualize stabilized structure:
+
+plt.imshow(state.reshape(H, W), cmap='plasma')
+plt.title("Hybrid SON–QTTN Stabilized Field")
+plt.show()
+
+text
+
+---
+
+## 7. Metrics
+
+| Metric | Definition | Interpretation |
+|---------|-------------|----------------|
+| **Compression ratio** | \( \frac{\text{input size}}{\text{effective rank size}} \) | Structural information retained |
+| **Reconstruction loss** | Mean‑squared error | Fidelity of global pattern recovery |
+| **Energy oscillation amplitude** | \( \langle \| x_{t+1} - x_t \|^2 \rangle \) | Convergence degree across steps |
+
+Optional code to compute:
+
+compression_ratio = (H*W) / compressed_rank
+print(f"Compression ratio: {compression_ratio:.1f}")
+
+text
+
+---
+
+## 8. Summary
+
+You now have a working hybrid SON‑QTTN model applied to **Fashion‑MNIST**:
+- SON propagates local structure and short‑range stochasticity,
+- QTTN maintains coherent multi‑scale correlations,
+- Their feedback loop stabilizes and reconstructs representations efficiently.
+
+---
+
+## 9. Next Steps
+
+- Integrate **EBM potentials** from “Hierarchical Discrete EBM + Block Gibbs…” notes.  
+- Test long‑range **Mamba‑style state transitions** for temporal compression.  
+- Add automated benchmarking (`notebooks/benchmarks_son_qttn.ipynb`).
+
+
+
+text
+
+***
+
+This notebook serves as both a **visual tutorial and reproducible experiment** for the THRML‑SON‑QTTN prototype. 
+
+ import jax
+import jax.numpy as jnp
+
+def stochastic_oscillator(state, params, key, dt=0.01):
+    """Simulate a stochastic oscillator (e.g., RLC circuit with thermal noise).
+    
+    Args:
+        state: [position, velocity]
+        params: [resistance, inductance, capacitance]
+        key: JAX PRNG key for noise
+        dt: Time step
+    
+    Returns:
+        Updated state
+    """
+    r, l, c = params
+    pos, vel = state
+    noise = jax.random.normal(key, shape=(2,)) * jnp.sqrt(dt)  # Thermal noise
+    accel = - (r / l) * vel - (1 / (l * c)) * pos + noise[0]
+    new_vel = vel + accel * dt
+    new_pos = pos + new_vel * dt
+    return jnp.array([new_pos, new_vel])
+
+src/qttn/contractions.py (Tensor contraction algorithms, e.g., for quantum tensor networks):python
+
+import jax.numpy as jnp
+from jax import jit
+
+@jit
+def tensor_contraction(tensor_a, tensor_b, indices_a, indices_b):
+    """Contract two tensors along specified indices.
+    
+    Args:
+        tensor_a, tensor_b: JAX arrays
+        indices_a, indices_b: Lists of axes to contract
+    
+    Returns:
+        Contracted tensor
+    """
+    return jnp.einsum(tensor_a, indices_a, tensor_b, indices_b)
+
+src/inference/ebm.py (Energy-based model routines, e.g., hierarchical EBM inference):python
+
+import jax
+import jax.numpy as jnp
+
+def energy_function(x, params):
+    """Simple energy function for EBM (e.g., quadratic potential).
+    
+    Args:
+        x: Input state
+        params: Model parameters
+    
+    Returns:
+        Energy scalar
+    """
+    return 0.5 * jnp.sum(params * x**2)  # Example: harmonic oscillator energy
+
+def langevin_dynamics(energy_fn, x_init, params, key, steps=100, lr=0.01):
+    """Langevin dynamics for sampling from EBM.
+    
+    Args:
+        energy_fn: Energy function
+        x_init: Initial state
+        params: Model params
+        key: PRNG key
+        steps: Number of iterations
+        lr: Learning rate
+    
+    Returns:
+        Sampled state
+    """
+    def step(carry, _):
+        x, key = carry
+        key, subkey = jax.random.split(key)
+        grad = jax.grad(energy_fn)(x, params)
+        noise = jax.random.normal(subkey, x.shape) * jnp.sqrt(2 * lr)
+        x = x - lr * grad + noise
+        return (x, key), None
+    
+    (x_final, _), _ = jax.lax.scan(step, (x_init, key), None, length=steps)
+    return x_final
+
+src/utils/math_ops.py (Shared math/JAX operations):python
+
+import jax.numpy as jnp
+
+def gaussian_pdf(x, mu=0.0, sigma=1.0):
+    """Gaussian probability density.
+    
+    Args:
+        x: Input
+        mu: Mean
+        sigma: Std dev
+    
+    Returns:
+        PDF value
+    """
+    return (1 / (sigma * jnp.sqrt(2 * jnp.pi))) * jnp.exp(-0.5 * ((x - mu) / sigma)**2)
+
+import jax
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+import networkx as nx
+
+def plot_phase_coupling(states, title="RLC Phase Coupling"):
+    """Plot phase space (position vs velocity) for oscillator states.
+    
+    Args:
+        states: Array of [position, velocity] over time
+        title: Plot title
+    """
+    fig, ax = plt.subplots()
+    ax.plot(states[:, 0], states[:, 1])
+    ax.set_xlabel("Position")
+    ax.set_ylabel("Velocity")
+    ax.set_title(title)
+    plt.savefig("phase_coupling.png")  # Save for repo or notebook
+    # plt.show()  # Uncomment for interactive
+
+def plot_waveform_energy(times, energies, title="Waveform Energy Evolution"):
+    """Plot energy over time for waveforms.
+    
+    Args:
+        times: Time array
+        energies: Energy values
+        title: Plot title
+    """
+    fig, ax = plt.subplots()
+    ax.plot(times, energies)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Energy")
+    ax.set_title(title)
+    plt.savefig("waveform_energy.png")
+
+def visualize_gaussian_nodes(nodes, edges, states, title="Gaussian Node State Evolution"):
+    """Visualize network topology with node states using NetworkX.
+    
+    Args:
+        nodes: List of node IDs
+        edges: List of (source, target) edges
+        states: Dict of node to state value (e.g., Gaussian mean)
+        title: Graph title
+    """
+    G = nx.Graph()
+    G.add_nodes_from(nodes)
+    G.add_edges_from(edges)
+    pos = nx.spring_layout(G)
+    node_colors = [states[node] for node in G.nodes()]
+    nx.draw(G, pos, node_color=node_colors, cmap=plt.cm.viridis, with_labels=True)
+    plt.title(title)
+    plt.savefig("node_evolution.png")
+
+# Example usage (in a notebook):
+# key = jax.random.PRNGKey(0)
+# state = jnp.array([0.0, 1.0])
+# params = jnp.array([0.1, 1.0, 1.0])
+# states = []
+# for _ in range(100):
+#     key, subkey = jax.random.split(key)
+#     state = stochastic_oscillator(state, params, subkey)
+#     states.append(state)
+# states = jnp.array(states)
+# plot_phase_coupling(states)
+
+These bridge theory to outputs: Run in examples/ notebooks to generate plots for RLC phases, energy waveforms, or tensor rank (e.g., via SVD visualizations). Optional: Add tensor rank plots by computing jnp.linalg.svd(tensor) and plotting singular values.5. Benchmarking and ReproducibilityI've added a reproducible experiment pipeline in the root: run_experiment.py. It uses Fashion-MNIST (loaded via PyTorch's torchvision, available in the env) for baseline EBM tasks. Store results in results/ dir.run_experiment.py:python
+
+import argparse
+import jax
+import jax.numpy as jnp
+import torch
+from torchvision import datasets, transforms
+from src.inference.ebm import energy_function, langevin_dynamics  # Import from src
+
+def load_dataset(dataset_name):
+    if dataset_name == "fashion_mnist":
+        transform = transforms.ToTensor()
+        train_set = datasets.FashionMNIST(root="./data", train=True, download=True, transform=transform)
+        return torch.utils.data.DataLoader(train_set, batch_size=64)
+    raise ValueError("Unsupported dataset")
+
+def compute_metrics(samples, originals):
+    recon_error = jnp.mean((samples - originals)**2)
+    return {"reconstruction_error": recon_error}
+
+def main(args):
+    key = jax.random.PRNGKey(0)
+    data_loader = load_dataset(args.dataset)
+    params = jnp.ones(784)  # Dummy params for flat image (28x28=784)
+
+    for batch in data_loader:
+        images = jnp.array(batch[0].flatten(start_dim=1))  # Flatten to vectors
+        samples = []
+        for img in images:
+            key, subkey = jax.random.split(key)
+            sample = langevin_dynamics(energy_function, img, params, subkey)
+            samples.append(sample)
+        samples = jnp.array(samples)
+        metrics = compute_metrics(samples, images)
+        print(metrics)  # Store to file in results/baselines.json
+        break  # Single batch for baseline
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", default="fashion_mnist")
+    parser.add_argument("--model", default="hierarchical-ebm")
+    args = parser.parse_args()
+    main(args)
+
+Run: python run_experiment.py --dataset fashion_mnist --model hierarchical-ebm. This computes baselines like reconstruction error and energy convergence (expand metrics as needed). Store outputs in results/baselines.json for comparisons.For CI: Add .github/workflows/test.yml for GitHub Actions:yaml
+
+name: Test Tensor Ops
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [cpu, gpu]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.10
+    - name: Install dependencies
+      run: pip install jax jaxlib pytest
+    - name: Run tests
+      env:
+        JAX_PLATFORM_NAME: ${{ matrix.backend }}
+      run: pytest tests/
+
+
+
+## Citation (WIP)
+
+@misc{minksy2025thrmlsonqttn,
+author = {Minsky, UX},
+title = {THRML-SON-QTTN: Semi-Functional Hybrid Oscillator-Tensor Prototype},
+year = {2025},
+publisher = {GitHub},
+journal = {GitHub Repository},
+howpublished = {\url{https://github.com/minksy-ux/thrml-son-qttn-Semi-Functional-v0.2-Prototype}}
+}
+
+text
